@@ -351,3 +351,264 @@ func tcIndex(n *ir.IndexExpr) ir.Node {
 ```
 
 以上是在编译期间的对数组的 check。在生成中间代码期间，还会插入运行时方法`runtime.panicIndex` 调用防止发生越界错误。这里我跳过了 ssa 的部分，先不看到那么深...
+
+#### 3.2 切片
+
+> 相比数组，切片更为常用
+
+创建部分的代码和书中的代码基本一样，只是和数组一样多了泛型相关判断
+
+```golang
+func NewSlice(elem *Type) *Type {
+	if t := elem.cache.slice; t != nil {
+		if t.Elem() != elem {
+			base.Fatalf("elem mismatch")
+		}
+		if elem.HasTParam() != t.HasTParam() || elem.HasShape() != t.HasShape() {
+			base.Fatalf("Incorrect HasTParam/HasShape flag for cached slice type")
+		}
+		return t
+	}
+
+	t := newType(TSLICE)
+	// extra 字段来附加类型，帮助运行时的动态获取
+	t.extra = Slice{Elem: elem}
+	elem.cache.slice = t
+	if elem.HasTParam() {
+		t.SetHasTParam(true)
+	}
+	if elem.HasShape() {
+		t.SetHasShape(true)
+	}
+	return t
+}
+```
+
+##### 3.2.1 数据结构
+
+```golang
+// SliceHeader is the runtime representation of a slice.
+// It cannot be used safely or portably and its representation may
+// change in a later release.
+// Moreover, the Data field is not sufficient to guarantee the data
+// it references will not be garbage collected, so programs must keep
+// a separate, correctly typed pointer to the underlying data.
+type SliceHeader struct {
+	Data uintptr
+	Len  int
+	Cap  int
+}
+```
+
+熟悉的 `Len` 和 `Cap`。`Data` 即指向一片连续的内存，这和后面 runtime 中数组的操作有关
+
+##### 3.2.2 初始化
+
+三种方式
+
+```golang
+arr[0:3] or slice[0:3]
+slice := []int{1, 2, 3}
+slice := make([]int, 10)
+```
+
+**使用下标**
+
+在作者展示的 SSA 代码中，能看到接收了几个参数，初始化一个 `array`，将 ptr 指向到 array，然后赋值 `cap` 和 `len`。
+
+**字面量**
+
+在编译期间，展开为
+
+```golang
+var vstat [3]int
+vstat[0] = 1
+vstat[1] = 2
+vstat[2] = 3
+var vauto *[3]int = new([3]int)
+*vauto = vstat
+slice := vauto[:]
+```
+
+**关键字**
+
+运行时参与，关键函数 `typecheck1`
+
+```golang
+func typecheck1(n ir.Node, top int) ir.Node {
+	...
+	switch n.Op() {
+	...
+	case ir.OMAKE:
+	n := n.(*ir.CallExpr)
+	return tcMake(n)
+	...
+	}
+}
+```
+
+跟进
+
+```golang
+func tcMake(n *ir.CallExpr) ir.Node {
+	args := n.Args
+	if len(args) == 0 {
+		base.Errorf("missing argument to make")
+		n.SetType(nil)
+		return n
+	}
+	// 取第一个参数
+	n.Args = nil
+	l := args[0]
+	l = typecheck(l, ctxType)
+	t := l.Type()
+	if t == nil {
+		n.SetType(nil)
+		return n
+	}
+	i := 1
+	var nn ir.Node
+	switch t.Kind() {
+		...
+		case types.TSLICE:
+		// 检查是否传递 len
+		if i >= len(args) {
+			base.Errorf("missing len argument to make(%v)", t)
+			n.SetType(nil)
+			return n
+		}
+
+		l = args[i]
+		i++
+		l = Expr(l)
+		var r ir.Node
+		if i < len(args) {
+			r = args[i]
+			i++
+			r = Expr(r)
+		}
+		// 类型判断
+		if l.Type() == nil || (r != nil && r.Type() == nil) {
+			n.SetType(nil)
+			return n
+		}
+		if !checkmake(t, "len", &l) || r != nil && !checkmake(t, "cap", &r) {
+			n.SetType(nil)
+			return n
+		}
+		// cap 必须 >= len
+		if ir.IsConst(l, constant.Int) && r != nil && ir.IsConst(r, constant.Int) && constant.Compare(l.Val(), token.GTR, r.Val()) {
+			base.Errorf("len larger than cap in make(%v)", t)
+			n.SetType(nil)
+			return n
+		}
+		nn = ir.NewMakeExpr(n.Pos(), ir.OMAKESLICE, l, r)
+	}
+}
+```
+
+判断以及校验，创建切片的 `runtime` 函数为
+
+```golang
+func makeslice(et *_type, len, cap int) unsafe.Pointer {
+	mem, overflow := math.MulUintptr(et.size, uintptr(cap))
+	if overflow || mem > maxAlloc || len < 0 || len > cap {
+		// NOTE: Produce a 'len out of range' error instead of a
+		// 'cap out of range' error when someone does make([]T, bignumber).
+		// 'cap out of range' is true too, but since the cap is only being
+		// supplied implicitly, saying len is clearer.
+		// See golang.org/issue/4085.
+		mem, overflow := math.MulUintptr(et.size, uintptr(len))
+		if overflow || mem > maxAlloc || len < 0 {
+			panicmakeslicelen()
+		}
+		panicmakeslicecap()
+	}
+
+	return mallocgc(mem, et, true)
+}
+```
+
+##### 3.2.3 访问元素
+
+##### 3.2.4 追加扩容
+
+两种情况处理，是否需要将 slice 赋值给原来的 slice。对于赋给原有变量的做了优化，不用担心拷贝发生的性能影响。
+
+**追加元素**
+
+这一部分代码和之前的不一样
+
+```golang
+func growslice(et *_type, old slice, cap int) slice {
+	...
+	newcap := old.cap
+	doublecap := newcap + newcap
+	// chriskali
+	// 点1：如果大于当前容量的两倍，则直接扩容到期望值
+	if cap > doublecap {
+		newcap = cap
+	// 当在2倍以内时
+	} else {
+		// 和文章中不一样，threshold 变成 256 了
+		const threshold = 256
+		// 点2：当小于 256 的时候，翻倍
+		if old.cap < threshold {
+			newcap = doublecap
+		} else {
+			// Check 0 < newcap to detect overflow
+			// and prevent an infinite loop.
+			// 点3：循环 25% 的增加，直到大于期望的值
+			for 0 < newcap && newcap < cap {
+				// Transition from growing 2x for small slices
+				// to growing 1.25x for large slices. This formula
+				// gives a smooth-ish transition between the two.
+				newcap += (newcap + 3*threshold) / 4
+			}
+			// Set newcap to the requested cap when
+			// the newcap calculation overflowed.
+			if newcap <= 0 {
+				newcap = cap
+			}
+		}
+	}
+
+	var overflow bool
+	var lenmem, newlenmem, capmem uintptr
+	// Specialize for common values of et.size.
+	// For 1 we don't need any division/multiplication.
+	// For sys.PtrSize, compiler will optimize division/multiplication into a shift by a constant.
+	// For powers of 2, use a variable shift.
+	// 点4：1、8、2的倍数做内存对齐。roundupsize 函数
+	switch {
+	case et.size == 1:
+		lenmem = uintptr(old.len)
+		newlenmem = uintptr(cap)
+		capmem = roundupsize(uintptr(newcap))
+		overflow = uintptr(newcap) > maxAlloc
+		newcap = int(capmem)
+	case et.size == goarch.PtrSize:
+		lenmem = uintptr(old.len) * goarch.PtrSize
+		newlenmem = uintptr(cap) * goarch.PtrSize
+		capmem = roundupsize(uintptr(newcap) * goarch.PtrSize)
+		overflow = uintptr(newcap) > maxAlloc/goarch.PtrSize
+		newcap = int(capmem / goarch.PtrSize)
+	case isPowerOfTwo(et.size):
+		var shift uintptr
+		if goarch.PtrSize == 8 {
+			// Mask shift for better code generation.
+			shift = uintptr(sys.Ctz64(uint64(et.size))) & 63
+		} else {
+			shift = uintptr(sys.Ctz32(uint32(et.size))) & 31
+		}
+		lenmem = uintptr(old.len) << shift
+		newlenmem = uintptr(cap) << shift
+		capmem = roundupsize(uintptr(newcap) << shift)
+		overflow = uintptr(newcap) > (maxAlloc >> shift)
+		newcap = int(capmem >> shift)
+	default:
+		...
+	}
+	...
+}
+```
