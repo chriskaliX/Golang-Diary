@@ -1,6 +1,6 @@
 # Golang-Diary
 
-This repository is for recording my golang learning. It's very important !!! [Reference](https://draveness.me/golang/docs/). PS: The book was bought
+This repository is for recording my golang learning. It's very important !!! [Reference](https://draveness.me/golang/docs/). PS: The book was bought, and it's fantastic, the Diary is just the part of this
 
 > 写了一段时间的 go, 原理\设计等方面的缺失必须要引起重视! 计划为在 2 个月内完成所有部分的阅读(源码级)
 
@@ -612,3 +612,105 @@ func growslice(et *_type, old slice, cap int) slice {
 	...
 }
 ```
+
+##### 3.2.5 拷贝切片
+
+简单来说 `runtime.memmove` 整个拷贝，新建 `SliceHeader` 将 `Data` ptr 指向到新建的内存。整段拷贝依然会消耗比较大的资源
+
+#### 3.3 哈希表
+
+> 核心思想：若关键字为 k，则其值存放在 f(k) 的存储位置上。由此，不需比较便可直接取得所查记录。在 `golang` 中，重点关注 `runtime/map.go` 下的实现
+
+##### 3.3.1 设计原理
+
+> 非常重要的数据结构之一。关键词：数据结构，哈希函数，冲突解决方法。建立一个合理的均匀分布 key 以及 冲突的处理 十分关键
+
+**哈希函数**
+
+> 补充一下
+
+- 直接定址法
+- 数字分析法
+- 平方取中法
+- 折叠法
+- 随机数法
+- 除留余数法
+
+**冲突解决**
+
+将无限映射到有限，一定会有冲突的问题。目前提到的冲突并不是哈希完全相等，而是部分，例如前几个字节相同
+
+常见的处理冲突的方式有：1. 开放寻址法 2. 拉链法 (百度的一个 3. 桶定址法)
+
+- 开放寻址法([Reference](https://en.wikipedia.org/wiki/Open_addressing))
+
+	核心思想为：依次探测和比较数组中的元素以判断目标键值对是否存在于哈希表中。当写入数据的时候，如果发生了冲突，就会将键值对写入到下一个索引不为空的位置
+	这一块跟语言无关，所以直接看[哈希表-Reference-1](https://zh.wikipedia.org/wiki/%E5%93%88%E5%B8%8C%E8%A1%A8)，更加直接一点。 增量的
+
+	- Linear Probing: 逐个弹出额存放地址的表，直到查找到一个空单元，把散列地址存放在该空单元
+	- Quadratic Probing: 平方探测
+	- Double hashing: 用另外一个 hash function 来做二次随机
+
+- 拉链法
+
+	拉链法的实现一般为数组 + 链表的形式。由于其平均查找时间短，存储节点的内存都是动态申请，节省内存空间。也是实现的最常见的方式。这个会在别的仓库里重新过一遍
+
+##### 3.3.2 数据结构
+
+```golang
+// A header for a Go map.
+type hmap struct {
+	// Note: the format of the hmap is also encoded in cmd/compile/internal/reflectdata/reflect.go.
+	// Make sure this stays in sync with the compiler's definition.
+	count     int // # live cells == size of map.  Must be first (used by len() builtin)
+	flags     uint8
+	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
+	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
+	hash0     uint32 // hash seed
+
+	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
+	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing
+	nevacuate  uintptr        // progress counter for evacuation (buckets less than this have been evacuated)
+
+	extra *mapextra // optional fields
+}
+
+type mapextra struct {
+	// If both key and elem do not contain pointers and are inline, then we mark bucket
+	// type as containing no pointers. This avoids scanning such maps.
+	// However, bmap.overflow is a pointer. In order to keep overflow buckets
+	// alive, we store pointers to all overflow buckets in hmap.extra.overflow and hmap.extra.oldoverflow.
+	// overflow and oldoverflow are only used if key and elem do not contain pointers.
+	// overflow contains overflow buckets for hmap.buckets.
+	// oldoverflow contains overflow buckets for hmap.oldbuckets.
+	// The indirection allows to store a pointer to the slice in hiter.
+	overflow    *[]*bmap
+	oldoverflow *[]*bmap
+
+	// nextOverflow holds a pointer to a free overflow bucket.
+	nextOverflow *bmap
+}
+
+// A bucket for a Go map.
+type bmap struct {
+	// tophash generally contains the top byte of the hash value
+	// for each key in this bucket. If tophash[0] < minTopHash,
+	// tophash[0] is a bucket evacuation state instead.
+	tophash [bucketCnt]uint8
+	// Followed by bucketCnt keys and then bucketCnt elems.
+	// NOTE: packing all the keys together and then all the elems together makes the
+	// code a bit more complicated than alternating key/elem/key/elem/... but it allows
+	// us to eliminate padding which would be needed for, e.g., map[int64]int8.
+	// Followed by an overflow pointer.
+}
+```
+
+作者博客里的图非常好，帮助我们理解
+
+![map-1](https://img.draveness.me/2020-10-18-16030322432679/hmap-and-buckets.png)
+
+另外附上一个[博客](https://phati-sawant.medium.com/internals-of-map-in-golang-33db6e25b3f8)里的图片
+
+![map-2](https://miro.medium.com/max/700/1*WIK6OKROozuefipgikW-8Q.png)
+
+首先 `hmap` 指向一个 `bucket array` ，每个 `bucket` (即 `bmap`) 存储至多 8 个键值对。在 `hmap` 中的 `extra` 字段存储为溢出桶
