@@ -655,24 +655,28 @@ func growslice(et *_type, old slice, cap int) slice {
 
 	拉链法的实现一般为数组 + 链表的形式。由于其平均查找时间短，存储节点的内存都是动态申请，节省内存空间。也是实现的最常见的方式。这个会在别的仓库里重新过一遍
 
+	有一个比较重要的概念 - 装载因子，装载因子越大，填入的数据越多，空间利用率就越高，但是发生 hash 冲突的的概率越大。在拉链法中，装载因子为
+
+	装载因子 := 元素数量 / 桶数量
+
+	在 golang 中装载因子固定的为 6.5，即每个 bucket 平均存储的 kv 超过 6.5 个的时候，就会进行扩容
+
 ##### 3.3.2 数据结构
 
 ```golang
 // A header for a Go map.
 type hmap struct {
-	// Note: the format of the hmap is also encoded in cmd/compile/internal/reflectdata/reflect.go.
-	// Make sure this stays in sync with the compiler's definition.
-	count     int // # live cells == size of map.  Must be first (used by len() builtin)
-	flags     uint8
-	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
-	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
+	count     int // 元素个数
+	flags     uint8	// 状态位
+	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)，通过 B 值来计算
+	noverflow uint16 // 溢出桶的大致数量
 	hash0     uint32 // hash seed
 
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
-	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing
+	oldbuckets unsafe.Pointer // 发生扩容，old buckets 指向老 buckets，长度为新的 1/2
 	nevacuate  uintptr        // progress counter for evacuation (buckets less than this have been evacuated)
 
-	extra *mapextra // optional fields
+	extra *mapextra // 优化 GC 扫描而设定的
 }
 
 type mapextra struct {
@@ -714,3 +718,202 @@ type bmap struct {
 ![map-2](https://miro.medium.com/max/700/1*WIK6OKROozuefipgikW-8Q.png)
 
 首先 `hmap` 指向一个 `bucket array` ，每个 `bucket` (即 `bmap`) 存储至多 8 个键值对。在 `hmap` 中的 `extra` 字段存储为溢出桶
+
+下面是关键的常量信息
+
+```golang
+const (
+	// Maximum number of key/elem pairs a bucket can hold.
+	bucketCntBits = 3
+	bucketCnt     = 1 << bucketCntBits
+
+	// 装载因子为 6.5
+	loadFactorNum = 13
+	loadFactorDen = 2
+
+	// Maximum key or elem size to keep inline (instead of mallocing per element).
+	// Must fit in a uint8.
+	// Fast versions cannot handle big elems - the cutoff size for
+	// fast versions in cmd/compile/internal/gc/walk.go must be at most this elem.
+	maxKeySize  = 128
+	maxElemSize = 128
+
+	// data offset should be the size of the bmap struct, but needs to be
+	// aligned correctly. For amd64p32 this means 64-bit alignment
+	// even though pointers are 32 bit.
+	dataOffset = unsafe.Offsetof(struct {
+		b bmap
+		v int64
+	}{}.v)
+
+	emptyRest      = 0 // this cell is empty, and there are no more non-empty cells at higher indexes or overflows.
+	emptyOne       = 1 // this cell is empty
+	evacuatedX     = 2 // key/elem is valid.  Entry has been evacuated to first half of larger table.
+	evacuatedY     = 3 // same as above, but evacuated to second half of larger table.
+	evacuatedEmpty = 4 // cell is empty, bucket is evacuated.
+	minTopHash     = 5 // minimum tophash for a normal filled cell.
+
+	// flags
+	iterator     = 1 // there may be an iterator using buckets
+	oldIterator  = 2 // there may be an iterator using oldbuckets
+	hashWriting  = 4 // a goroutine is writing to the map
+	sameSizeGrow = 8 // the current map growth is to a new map of the same size
+
+	// sentinel bucket ID for iterator checks
+	noCheck = 1<<(8*goarch.PtrSize) - 1
+)
+```
+
+![map-3](https://segmentfault.com/img/bVcIsJO)
+
+为什么是 6.5 呢，在 runtime.map 中找到一个注释，他们做了一下解释和 benchmark
+
+```golang
+// Picking loadFactor: too large and we have lots of overflow
+// buckets, too small and we waste a lot of space. I wrote
+// a simple program to check some stats for different loads:
+// (64-bit, 8 byte keys and elems)
+//  loadFactor    %overflow  bytes/entry     hitprobe    missprobe
+//        4.00         2.13        20.77         3.00         4.00
+//        4.50         4.05        17.30         3.25         4.50
+//        5.00         6.85        14.77         3.50         5.00
+//        5.50        10.55        12.94         3.75         5.50
+//        6.00        15.27        11.67         4.00         6.00
+//        6.50        20.90        10.79         4.25         6.50
+//        7.00        27.14        10.15         4.50         7.00
+//        7.50        34.03         9.73         4.75         7.50
+//        8.00        41.10         9.40         5.00         8.00
+//
+// %overflow   = percentage of buckets which have an overflow bucket
+// bytes/entry = overhead bytes used per key/elem pair
+// hitprobe    = # of entries to check when looking up a present key
+// missprobe   = # of entries to check when looking up an absent key
+//
+// Keep in mind this data is for maximally loaded tables, i.e. just
+// before the table grows. Typical tables will be somewhat less loaded.
+```
+
+##### 3.3.3 初始化
+
+**字面量**
+
+创建的过程和slice基本相同
+
+**运行时**
+
+当我们用 `make(map[k]v)` 或者 `make(map[k]v, hint)`，且 hint 小于等于 8 的时候，会分配到 heap
+
+```golang
+// makemap_small implements Go map creation for make(map[k]v) and
+// make(map[k]v, hint) when hint is known to be at most bucketCnt
+// at compile time and the map needs to be allocated on the heap.
+func makemap_small() *hmap {
+	h := new(hmap)
+	h.hash0 = fastrand()
+	return h
+}
+```
+
+当 hint 比 8 大的时候，调用函数 `makemap` 
+
+```golang
+func makemap(t *maptype, hint int, h *hmap) *hmap {
+	// 判断是否溢出
+	mem, overflow := math.MulUintptr(uintptr(hint), t.bucket.size)
+	if overflow || mem > maxAlloc {
+		hint = 0
+	}
+
+	// initialize Hmap
+	if h == nil {
+		h = new(hmap)
+	}
+	h.hash0 = fastrand()
+
+	// Find the size parameter B which will hold the requested # of elements.
+	// For hint < 0 overLoadFactor returns false since hint < bucketCnt.
+	// 根据传入的 hint 算出最小的 B 值
+	B := uint8(0)
+	for overLoadFactor(hint, B) {
+		B++
+	}
+	h.B = B
+
+	// allocate initial hash table
+	// if B == 0, the buckets field is allocated lazily later (in mapassign)
+	// If hint is large zeroing this memory could take a while.
+	if h.B != 0 {
+		var nextOverflow *bmap
+		// 根据 B 值创建桶
+		h.buckets, nextOverflow = makeBucketArray(t, h.B, nil)
+		if nextOverflow != nil {
+			h.extra = new(mapextra)
+			h.extra.nextOverflow = nextOverflow
+		}
+	}
+
+	return h
+}
+```
+
+##### 读写操作
+
+**访问**
+
+**写入**
+
+**扩容**
+
+扩容有两种情况，第一种就是上面提到的装载因子超过了 6.5
+第二种即为使用了太多溢出桶，为等量扩容
+
+```golang
+func hashGrow(t *maptype, h *hmap) {
+	// If we've hit the load factor, get bigger.
+	// Otherwise, there are too many overflow buckets,
+	// so keep the same number of buckets and "grow" laterally.
+	bigger := uint8(1)
+	if !overLoadFactor(h.count+1, h.B) {
+		bigger = 0
+		h.flags |= sameSizeGrow
+	}
+	// 将原先的 buckets 转移到 oldbuckets
+	oldbuckets := h.buckets
+	// 创建新的 buckets 和 溢出桶
+	newbuckets, nextOverflow := makeBucketArray(t, h.B+bigger, nil)
+
+	flags := h.flags &^ (iterator | oldIterator)
+	if h.flags&iterator != 0 {
+		flags |= oldIterator
+	}
+	// commit the grow (atomic wrt gc)
+	h.B += bigger
+	h.flags = flags
+	h.oldbuckets = oldbuckets
+	h.buckets = newbuckets
+	h.nevacuate = 0
+	h.noverflow = 0
+
+	if h.extra != nil && h.extra.overflow != nil {
+		// Promote current overflow buckets to the old generation.
+		if h.extra.oldoverflow != nil {
+			throw("oldoverflow is not nil")
+		}
+		h.extra.oldoverflow = h.extra.overflow
+		h.extra.overflow = nil
+	}
+	if nextOverflow != nil {
+		if h.extra == nil {
+			h.extra = new(mapextra)
+		}
+		h.extra.nextOverflow = nextOverflow
+	}
+
+	// the actual copying of the hash table data is done incrementally
+	// by growWork() and evacuate().
+}
+```
+
+...
+
+**删除**
