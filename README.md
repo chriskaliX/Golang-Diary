@@ -983,7 +983,7 @@ fun 这个是动态派发和虚函数表，虚函数表好像在 C++ 里面看�
 
 ##### 4.2.2 类型转换
 
-按照书中说的，compile 一下看汇编
+按照书中说的，`go tool compile -S test.go` 一下看汇编
 
 ```golang
 package main
