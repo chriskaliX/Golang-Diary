@@ -917,3 +917,94 @@ func hashGrow(t *maptype, h *hmap) {
 ...
 
 **删除**
+
+### 第四章 语言基础
+
+#### 4.1 函数调用
+
+Go 中的参数传递, 无论是传递基本类型、结构体还是**指针**，都会对传递的参数进行拷贝
+
+#### 4.2 接口
+
+##### 4.2.1 概述
+
+**分类**
+
+iface(runtime.iface) - eface(runtime.eface)
+
+**指针和接口**
+
+两种形式，对接口的实现
+
+```golang
+// 结构体初始化
+func (c  Cat) Quack{}
+// 指针初始化
+func (c *Cat) Quack{}
+```
+
+首先记住一个结论
+
+||结构体实现|结构体指针实现|
+|:-:|:-:|:-:|
+|结构体初始化变量|P|F|
+|结构体指针初始化变量|P|P|
+
+##### 4.2.2 数据结构
+
+上面提到了有两种分类, 其中 `runtime.iface` 表示的是包含方法的接口, `runtime.eface` 表示的是不包含任何方法的 interface{} 类型
+
+```golang
+type eface struct {
+	typ, val unsafe.Pointer
+}
+
+type iface struct {
+	tab  *itab
+	data unsafe.Pointer
+}
+```
+
+和书中略微不同的是, `eface` 的这部分 `typ` 也已经变成了 unsafe.Pointer, （猜测可能是因为泛型?）
+
+我们看一下 `itab` 的定义
+
+```golang
+type itab struct {
+	inter *interfacetype
+	_type *_type
+	hash  uint32 // copy of _type.hash. Used for type switches.
+	_     [4]byte
+	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.
+}
+```
+
+fun 这个是动态派发和虚函数表，虚函数表好像在 C++ 里面看过这个，但是忘记了
+
+##### 4.2.2 类型转换
+
+按照书中说的，compile 一下看汇编
+
+```golang
+package main
+
+// go tool compile -S test.go
+
+type Duck interface {
+	Quack()
+}
+
+type Cat struct {
+	Name string
+}
+
+//go:noinline
+func (c *Cat) Quack() {
+	println(c.Name + " meow")
+}
+
+func main() {
+	var c Duck = &Cat{Name: "draven"}
+	c.Quack()
+}
+```
