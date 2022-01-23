@@ -1402,3 +1402,14 @@ func execute(gp *g, inheritTime bool) {
 - 协作式调度 
 - 系统监控 
 
+##### 6.5.7 线程管理
+
+生命周期：
+
+运行时通过 runtime.startm 来执行处理器 P，如果没能从闲置列表中获取到 M，就会创建新的线程
+
+通过调用 clone 来创建新的系统线程。
+
+**使用系统调用 clone 创建的线程会在线程主动调用 exit、或者传入的函数 runtime.mstart 返回会主动退出，runtime.mstart 会执行调用 runtime.newm 时传入的匿名函数 fn，到这里也就完成了从线程创建到销毁的整个闭环。**
+
+线程的创建到销毁
