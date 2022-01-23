@@ -981,14 +981,14 @@ type itab struct {
 
 fun 这个是动态派发和虚函数表，虚函数表好像在 C++ 里面看过这个，但是忘记了
 
-##### 4.2.2 类型转换
+##### 4.2.3 类型转换
 
 按照书中说的，`go tool compile -S test.go` 一下看汇编
 
 ```golang
 package main
 
-// go tool compile -S test.go
+// go tool compile -N -S test.go
 
 type Duck interface {
 	Quack()
@@ -1008,3 +1008,397 @@ func main() {
 	c.Quack()
 }
 ```
+
+##### 4.2.4 类型断言
+
+##### 4.2.5 动态派发
+
+### 第五章 常用关键字
+
+#### 5.1 for & for range
+
+for range 的形式最终也会优化成 for 循环
+
+##### 5.1.1 现象
+
+容易出错的地方
+
+```golang
+func main() {
+	arr := []int{1, 2, 3}
+	newArr := []*int{}
+	for _, v := range arr {
+		newArr = append(newArr, &v) // should be &arr[i]
+	}
+	for _, v := range newArr {
+		fmt.Println(*v)
+	}
+}
+
+// result: 3 3 3
+// reason: 而遇到这种同时遍历索引和元素的 range 循环时，Go 语言会额外创建一个新的 v2 变量存储切片中的元素，循环中使用的这个变量 v2 会在每一次迭代被重新赋值而覆盖，赋值时也会触发拷贝
+```
+
+```golang
+// 会优化, 直接调用 runtime.memclrNoHeapPointers 或者 runtime.memclrHasPointers 清除目标数组内存空间中的全部数据
+for i := range test {
+	test[i] = 0
+}
+```
+#### 5.2 select
+
+#### 5.3 defer
+
+##### 5.3.1 现象
+
+关键词：顺序、传递参数预计算
+
+顺序：FILO
+
+预计算：代码 demo
+
+```golang
+func main() {
+	startedAt := time.Now()
+	defer fmt.Println(time.Since(startedAt))
+	
+	time.Sleep(time.Second)
+}
+
+// result 0s
+```
+
+在调用 defer 的时候就已经完成了计算。函数调用是传值的，所以运行到 defer 关键字的时候已经拷贝了当前的参数，解决方法就是匿名函数
+
+这个倒是挺有意思的，之前被问到过
+
+```golang
+func main() {
+	startedAt := time.Now()
+	defer func() { fmt.Println(time.Since(startedAt)) }()
+	
+	time.Sleep(time.Second)
+}
+```
+
+同样值传递，但是拷贝的是函数指针，在退出前进行运算
+
+##### 5.3.2 数据结构
+
+直接找到源码内带注释的
+
+```golang
+// A _defer holds an entry on the list of deferred calls.
+// If you add a field here, add code to clear it in freedefer and deferProcStack
+// This struct must match the code in cmd/compile/internal/ssagen/ssa.go:deferstruct
+// and cmd/compile/internal/ssagen/ssa.go:(*state).call.
+// Some defers will be allocated on the stack and some on the heap.
+// All defers are logically part of the stack, so write barriers to
+// initialize them are not required. All defers must be manually scanned,
+// and for heap defers, marked.
+type _defer struct {
+	started bool
+	heap    bool
+	// openDefer indicates that this _defer is for a frame with open-coded
+	// defers. We have only one defer record for the entire frame (which may
+	// currently have 0, 1, or more defers active).
+	openDefer bool
+	sp        uintptr // sp at time of defer
+	pc        uintptr // pc at time of defer
+	fn        func()  // can be nil for open-coded defers
+	_panic    *_panic // panic that is running defer
+	link      *_defer // next defer on G; can point to either heap or stack!
+
+	// If openDefer is true, the fields below record values about the stack
+	// frame and associated function that has the open-coded defer(s). sp
+	// above will be the sp for the frame, and pc will be address of the
+	// deferreturn call in the function.
+	fd   unsafe.Pointer // funcdata for the function associated with the frame
+	varp uintptr        // value of varp for the stack frame
+	// framepc is the current pc associated with the stack frame. Together,
+	// with sp above (which is the sp associated with the stack frame),
+	// framepc/sp can be used as pc/sp pair to continue a stack trace via
+	// gentraceback().
+	framepc uintptr
+}
+```
+
+`_defer` 是延迟调用表当中的一个元素，最终都会通过 link 串联起来。在 link 的注释中也能看到，可以在堆 或者 栈上分配
+
+##### 5.3.3 执行机制
+
+关键词：根据开放编码 open-coded
+
+```golang
+func (s *state) stmt(n ir.Node) {
+	switch n.Op() {
+	...
+	case ir.ODEFER:
+		n := n.(*ir.GoDeferStmt)
+		if base.Debug.Defer > 0 {
+			var defertype string
+			if s.hasOpenDefers {
+				defertype = "open-coded"
+			} else if n.Esc() == ir.EscNever {
+				defertype = "stack-allocated"
+			} else {
+				defertype = "heap-allocated"
+			}
+			base.WarnfAt(n.Pos(), "%s defer", defertype)
+		}
+		// 判断开放编码
+		if s.hasOpenDefers {
+			s.openDeferRecord(n.Call.(*ir.CallExpr))
+		} else {
+			d := callDefer // 堆
+			if n.Esc() == ir.EscNever {
+				d = callDeferStack // 栈
+			}
+			s.callResult(n.Call.(*ir.CallExpr), d)
+		}
+	}
+```
+
+##### 5.3.4 堆上分配
+
+##### 5.3.5 栈上分配
+
+##### 5.3.6 开放编码
+
+> unfinished https://draveness.me/golang/docs/part2-foundation/ch05-keyword/golang-defer/
+
+然而开放编码作为一种优化 defer 关键字的方法，它不是在所有的场景下都会开启的，开放编码只会在满足以下的条件时启用：
+
+函数的 defer 数量少于或者等于 8 个；
+函数的 defer 关键字不能在循环中执行；
+函数的 return 语句与 defer 语句的乘积小于或者等于 15 个；
+
+#### 5.4 panic & recover
+
+##### 5.4.1 现象
+
+- panic 只会触发当前 Goroutine 的 defer；
+- recover 只有在 defer 中调用才会生效；
+- panic 允许在 defer 中嵌套多次调用；
+
+一个一个理解，首先第一个，code demo
+
+```golang
+func main() {
+	defer println("in main")
+	go func() {
+		defer println("in goroutine")
+		panic("")
+	}()
+
+	time.Sleep(1 * time.Second)
+}
+```
+
+只输出 `in goroutine` 。在之前的结构体里，看 link 的注释，可以看到 `next defer on G;`，是每一个 Goroutine 维护一个 _defer 链表，所以只触发当前的
+
+第二个太简单跳过
+
+第三个代码范例
+
+```golang
+func main() {
+	defer fmt.Println("in main")
+	defer func() {
+		defer func() {
+			panic("panic again and again")
+		}()
+		panic("panic again")
+	}()
+	panic("panic once")
+}
+```
+
+defer 中的 panic 都会依次打印。panic 不会影响 defer 的正常运行，所以一般来说用 defer 更为安全
+
+....
+
+#### 5.5 make & new
+
+- make 的作用是初始化内置的数据结构，也就是我们在前面提到的切片、哈希表和 Channel
+- new 的作用是根据传入的类型分配一片内存空间并返回指向这片内存空间的指针
+
+## 第三部分：运行时
+
+### 第六章 并发编程
+
+#### 6.1 上下文 Context
+
+作用：跨 Goroutine 之间同步请求数据、取消信号、处理截止时间
+
+#### 6.5 调度器
+
+> 迫不及待, 先看一下调度器相关, 经典老八股文。[文章](https://draveness.me/golang/docs/part3-runtime/ch06-concurrency/golang-goroutine/)很经典, 可以根据自己需求去看, 我只记录笔记
+
+首先是进程和线程，一个进程可以对应多个线程，这里说的是系统级别的。线程之间的通信是基于共享内存。但是线程的创建和销毁都需要消耗大约 1us 左右的时间，但是 Go 调度器对 Goroutine 的上下文切换为 0.2us 左右，减少了 80% 的开销
+
+模型大度为
+
+Goroutine
+--------
+Thread
+--------
+Process
+
+由于提到了线程级别的切换的损耗相对于 Goroutine 来说更大，所以 Go 使用与 CPU 数量相等的 Thread，来减少切换带来的损耗。在每个 Thread 上面，通过 Golang 的调度器来做 Goroutine 的切换。
+
+文中提到了 Golang 的调度器的演进机制，这里我们只看目前最新的，即抢占式调度器 - 基于信号的抢占式调度器（从 go 1.14 开始）；再稍微看一下 非均匀存储访问调度器 · 提案
+
+##### 6.5.1 设计原理
+
+> 相关[文档](https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md)
+
+###### 基于协作的抢占式调度
+
+1. 编译器会在调用函数前插入 runtime.morestack；
+2. Go 语言运行时会在垃圾回收暂停程序、系统监控发现 Goroutine 运行超过 10ms 时发出抢占请求 StackPreempt；
+3. 当发生函数调用时，可能会执行编译器插入的 runtime.morestack，它调用的 runtime.newstack 会检查 Goroutine 的 stackguard0 字段是否为 StackPreempt；
+4. 如果 stackguard0 是 StackPreempt，就会触发抢占让出当前线程；
+
+原理即为在 compile 的时候插入，在GC等对运行超过 10ms 的情况发出抢占请求，当发生调用的时候，调用编译插入的 `runtime.morestack` 来判断是否可以抢占，如果可以就让出当前线程
+
+这种的入口点只有在函数抢占的时候会触发抢占，所以还是需要协作的。看来问题也比较明显，就是当一个 Goroutine 不涉及到函数调度的时候，它不会主动让出当前线程。在简书上找到的一个案例如下：
+
+```golang
+package main
+
+import (
+    "runtime"
+    "time"
+)
+
+func main() {
+    runtime.GOMAXPROCS(1)
+    go func() {
+        for {
+        }
+    }()
+
+    time.Sleep(time.Millisecond)
+    println("OK")
+}
+```
+
+由于匿名函数先占用了协程, 且不涉及到函数调度，导致永远不会跑到 OK
+
+**优势**
+
+> 直接摘抄了，插在函数调用前面的好处是不需要保存寄存器状态，对于 GC 来说根节点也能知道所有的安全点
+
+Up to and including Go 1.10, Go has used cooperative preemption with safe-points only at function calls (and even then, not if the function is small or gets inlined). This means that Go can only switch between concurrently-executing goroutines at specific points. The main advantage of this is that the compiler can ensure useful invariants at these safe-points. In particular, the compiler ensures that all local garbage collection roots are known at all safe-points, which is critical to precise garbage collection. It can also ensure that no registers are live at safe-points, which means the Go runtime can switch goroutines without having to save and restore a large register set.
+
+**问题**
+
+1. 推迟 STW 操作
+2. 推迟调度
+3. 推迟栈扫描
+4. 特殊情况下会造成程序暂停
+
+这些问题在协作式抢占中后来也有不同程度的优化。在后续的1.14版本中，提交了非协作式的抢占调度
+
+###### 基于信号的抢占式调度
+
+1. 程序启动时，在 runtime.sighandler 中注册 SIGURG 信号的处理函数 runtime.doSigPreempt；
+2. 在触发垃圾回收的栈扫描时会调用 runtime.suspendG 挂起 Goroutine，该函数会执行下面的逻辑：
+	- 将 _Grunning 状态的 Goroutine 标记成可以被抢占，即将 preemptStop 设置成 true；
+    - 调用 runtime.preemptM 触发抢占；
+3. runtime.preemptM 会调用 runtime.signalM 向线程发送信号 SIGURG；
+4. 操作系统会中断正在运行的线程并执行预先注册的信号处理函数 runtime.doSigPreempt；
+5. runtime.doSigPreempt 函数会处理抢占信号，获取当前的 SP 和 PC 寄存器并调用 runtime.sigctxt.pushCall；
+6. runtime.sigctxt.pushCall 会修改寄存器并在程序回到用户态时执行 runtime.asyncPreempt；
+7. 汇编指令 runtime.asyncPreempt 会调用运行时函数 runtime.asyncPreempt2；
+8. runtime.asyncPreempt2 会调用 runtime.preemptPark；
+9. runtime.preemptPark 会修改当前 Goroutine 的状态到 _Gpreempted 并调用 runtime.schedule 让当前函数陷入休眠并让出线程，调度器会选择其它的 Goroutine 继续执行；
+
+简单来说在程序启动的时候，通过 `runtime.sighandler` 注册了 SIGURG 信号，在 GC 的栈扫描的时候，挂起 goroutine，向 M 发送信号（M 在下面会说），然后然当前 goroutine 休眠执行其他的 G
+
+##### 6.5.2 数据结构
+
+首先 GMP 模型。
+G代表Goroutine
+M代表操作系统的线程
+P为处理器，运行在线程上的本地调度器
+
+###### G
+
+在 runtime2.go 中我们能看到 `type g struct` 这一块比较复杂，感觉暂时不需要特地展开学习。有些地方我看了文章觉得比较有意思
+
+1. Goroutine 的状态，包括 `_Grunnable`, 没有执行代码，没有栈的所有权，存储在运行队列中。这个之前在 pprof 代码的时候看到 findrunnable 的占比很高，有印象
+2. Goroutine 状态在运行期间在 `_Grunning`，`_Grunnable`，`等待中（系统调用结束等，包括 _Gwaiting、_Gsyscall 和 _Gpreempted 几个状态）` 来回切换
+
+###### M
+
+M 操作系统线程，最大的时候是 10000。最大只会有 `GOMAXPROCS` 个线程，默认和 CPU 数量相同。对这里有一个问题，在 docker 下也能获取到正确值吗？
+
+由此找到另外一个[博客](https://pandaychen.github.io/2020/02/28/GOMAXPROCS-POT/) 作为参考。在 线程数量大于 CPU 数量的时候，会造成线程的切换造成不必要的损失
+
+对应的结构体是 `type m struct`
+
+###### P
+
+P 当中比较重要的是：
+反向存储的线程维护着线程与处理器之间的关系，而 runqhead、runqtail 和 runq 三个字段表示处理器持有的运行队列，其中存储着待执行的 Goroutine 列表，runnext 中是线程下一个需要执行的 Goroutine。
+
+##### 6.5.3 调度器启动
+
+##### 6.5.4 创建 Goroutine
+
+##### 6.5.5 调度循环
+
+1. 为了保证公平，有一定记录从全局队列中查找 goroutine
+2. 从本地队列中查找待执行的 goroutine
+3. 从 findrunnable 中进行查找
+
+循环为
+
+schedule->execute->gogo->goexit0->schedule
+
+execute 做好准备工作
+
+```golang
+func execute(gp *g, inheritTime bool) {
+	_g_ := getg()
+
+	// Assign gp.m before entering _Grunning so running Gs have an
+	// M.
+	_g_.m.curg = gp
+	gp.m = _g_.m
+	casgstatus(gp, _Grunnable, _Grunning)
+	gp.waitsince = 0
+	gp.preempt = false
+	gp.stackguard0 = gp.stack.lo + _StackGuard
+	if !inheritTime {
+		_g_.m.p.ptr().schedtick++
+	}
+
+	// Check whether the profiler needs to be turned on or off.
+	hz := sched.profilehz
+	if _g_.m.profilehz != hz {
+		setThreadCPUProfiler(hz)
+	}
+
+	if trace.enabled {
+		// GoSysExit has to happen when we have a P, but before GoStart.
+		// So we emit it here.
+		if gp.syscallsp != 0 && gp.sysblocktraced {
+			traceGoSysExit(gp.sysexitticks)
+		}
+		traceGoStart()
+	}
+
+	gogo(&gp.sched)
+}
+```
+
+##### 6.5.6 触发调度
+
+- 主动挂起 
+- 系统调用 
+- 协作式调度 
+- 系统监控 
+
