@@ -185,7 +185,7 @@ func anylit(n ir.Node, var_ ir.Node, init *ir.Nodes) {
 			base.Fatalf("anylit: not struct/array")
 		}
         // chriskali
-        // 关键点，判断长度是否大于 4 
+        // 关键点，判断长度是否大于 4
 		if isSimpleName(var_) && len(n.List) > 4 {
 			// lay out static data
 			vstat := readonlystaticname(t)
@@ -221,7 +221,7 @@ func anylit(n ir.Node, var_ ir.Node, init *ir.Nodes) {
 }
 ```
 
-可以看到判断的临界点为元素个数是否大于4。跟进 `fixedlit` 函数，主要看对 `Kind` 的处理
+可以看到判断的临界点为元素个数是否大于 4。跟进 `fixedlit` 函数，主要看对 `Kind` 的处理
 
 ```golang
 func fixedlit(ctxt initContext, kind initKind, n *ir.CompLitExpr, var_ ir.Node, init *ir.Nodes) {
@@ -644,22 +644,22 @@ func growslice(et *_type, old slice, cap int) slice {
 
 - 开放寻址法([Reference](https://en.wikipedia.org/wiki/Open_addressing))
 
-	核心思想为：依次探测和比较数组中的元素以判断目标键值对是否存在于哈希表中。当写入数据的时候，如果发生了冲突，就会将键值对写入到下一个索引不为空的位置
-	这一块跟语言无关，所以直接看[哈希表-Reference-1](https://zh.wikipedia.org/wiki/%E5%93%88%E5%B8%8C%E8%A1%A8)，更加直接一点。 增量的
+  核心思想为：依次探测和比较数组中的元素以判断目标键值对是否存在于哈希表中。当写入数据的时候，如果发生了冲突，就会将键值对写入到下一个索引不为空的位置
+  这一块跟语言无关，所以直接看[哈希表-Reference-1](https://zh.wikipedia.org/wiki/%E5%93%88%E5%B8%8C%E8%A1%A8)，更加直接一点。 增量的
 
-	- Linear Probing: 逐个弹出额存放地址的表，直到查找到一个空单元，把散列地址存放在该空单元
-	- Quadratic Probing: 平方探测
-	- Double hashing: 用另外一个 hash function 来做二次随机
+  - Linear Probing: 逐个弹出额存放地址的表，直到查找到一个空单元，把散列地址存放在该空单元
+  - Quadratic Probing: 平方探测
+  - Double hashing: 用另外一个 hash function 来做二次随机
 
 - 拉链法
 
-	拉链法的实现一般为数组 + 链表的形式。由于其平均查找时间短，存储节点的内存都是动态申请，节省内存空间。也是实现的最常见的方式。这个会在别的仓库里重新过一遍
+  拉链法的实现一般为数组 + 链表的形式。由于其平均查找时间短，存储节点的内存都是动态申请，节省内存空间。也是实现的最常见的方式。这个会在别的仓库里重新过一遍
 
-	有一个比较重要的概念 - 装载因子，装载因子越大，填入的数据越多，空间利用率就越高，但是发生 hash 冲突的的概率越大。在拉链法中，装载因子为
+  有一个比较重要的概念 - 装载因子，装载因子越大，填入的数据越多，空间利用率就越高，但是发生 hash 冲突的的概率越大。在拉链法中，装载因子为
 
-	装载因子 := 元素数量 / 桶数量
+  装载因子 := 元素数量 / 桶数量
 
-	在 golang 中装载因子固定的为 6.5，即每个 bucket 平均存储的 kv 超过 6.5 个的时候，就会进行扩容
+  在 golang 中装载因子固定的为 6.5，即每个 bucket 平均存储的 kv 超过 6.5 个的时候，就会进行扩容
 
 ##### 3.3.2 数据结构
 
@@ -793,11 +793,17 @@ const (
 // before the table grows. Typical tables will be somewhat less loaded.
 ```
 
+补充：这里在幼麟的视频里面说的很好，我更新记录记录几个关键字：
+
+1. 是否大于 1024，小于先尝试翻倍扩容，大于则 1.25 倍，重复直到...
+2. 当小于 1024 的时候和扩容前 \* 2 的相比，如果大于则取赋值的 Cap
+3. 内存申请的时候对齐，8，16，32，48，例如当原先 cap 为 2，扩容之后为 5，5\*8=40，则取大值 48
+
 ##### 3.3.3 初始化
 
 **字面量**
 
-创建的过程和slice基本相同
+创建的过程和 slice 基本相同
 
 **运行时**
 
@@ -814,7 +820,7 @@ func makemap_small() *hmap {
 }
 ```
 
-当 hint 比 8 大的时候，调用函数 `makemap` 
+当 hint 比 8 大的时候，调用函数 `makemap`
 
 ```golang
 func makemap(t *maptype, hint int, h *hmap) *hmap {
@@ -945,10 +951,10 @@ func (c *Cat) Quack{}
 
 首先记住一个结论
 
-||结构体实现|结构体指针实现|
-|:-:|:-:|:-:|
-|结构体初始化变量|P|F|
-|结构体指针初始化变量|P|P|
+|                      | 结构体实现 | 结构体指针实现 |
+| :------------------: | :--------: | :------------: |
+|   结构体初始化变量   |     P      |       F        |
+| 结构体指针初始化变量 |     P      |       P        |
 
 ##### 4.2.2 数据结构
 
@@ -1045,6 +1051,7 @@ for i := range test {
 	test[i] = 0
 }
 ```
+
 #### 5.2 select
 
 #### 5.3 defer
@@ -1061,7 +1068,7 @@ for i := range test {
 func main() {
 	startedAt := time.Now()
 	defer fmt.Println(time.Since(startedAt))
-	
+
 	time.Sleep(time.Second)
 }
 
@@ -1076,7 +1083,7 @@ func main() {
 func main() {
 	startedAt := time.Now()
 	defer func() { fmt.Println(time.Since(startedAt)) }()
-	
+
 	time.Sleep(time.Second)
 }
 ```
@@ -1195,7 +1202,7 @@ func main() {
 }
 ```
 
-只输出 `in goroutine` 。在之前的结构体里，看 link 的注释，可以看到 `next defer on G;`，是每一个 Goroutine 维护一个 _defer 链表，所以只触发当前的
+只输出 `in goroutine` 。在之前的结构体里，看 link 的注释，可以看到 `next defer on G;`，是每一个 Goroutine 维护一个 \_defer 链表，所以只触发当前的
 
 第二个太简单跳过
 
@@ -1239,10 +1246,10 @@ defer 中的 panic 都会依次打印。panic 不会影响 defer 的正常运行
 
 模型大度为
 
-Goroutine
---------
-Thread
---------
+## Goroutine
+
+## Thread
+
 Process
 
 由于提到了线程级别的切换的损耗相对于 Goroutine 来说更大，所以 Go 使用与 CPU 数量相等的 Thread，来减少切换带来的损耗。在每个 Thread 上面，通过 Golang 的调度器来做 Goroutine 的切换。
@@ -1260,7 +1267,7 @@ Process
 3. 当发生函数调用时，可能会执行编译器插入的 runtime.morestack，它调用的 runtime.newstack 会检查 Goroutine 的 stackguard0 字段是否为 StackPreempt；
 4. 如果 stackguard0 是 StackPreempt，就会触发抢占让出当前线程；
 
-原理即为在 compile 的时候插入，在GC等对运行超过 10ms 的情况发出抢占请求，当发生调用的时候，调用编译插入的 `runtime.morestack` 来判断是否可以抢占，如果可以就让出当前线程
+原理即为在 compile 的时候插入，在 GC 等对运行超过 10ms 的情况发出抢占请求，当发生调用的时候，调用编译插入的 `runtime.morestack` 来判断是否可以抢占，如果可以就让出当前线程
 
 这种的入口点只有在函数抢占的时候会触发抢占，所以还是需要协作的。看来问题也比较明显，就是当一个 Goroutine 不涉及到函数调度的时候，它不会主动让出当前线程。在简书上找到的一个案例如下：
 
@@ -1299,30 +1306,30 @@ Up to and including Go 1.10, Go has used cooperative preemption with safe-points
 3. 推迟栈扫描
 4. 特殊情况下会造成程序暂停
 
-这些问题在协作式抢占中后来也有不同程度的优化。在后续的1.14版本中，提交了非协作式的抢占调度
+这些问题在协作式抢占中后来也有不同程度的优化。在后续的 1.14 版本中，提交了非协作式的抢占调度
 
 ###### 基于信号的抢占式调度
 
 1. 程序启动时，在 runtime.sighandler 中注册 SIGURG 信号的处理函数 runtime.doSigPreempt；
 2. 在触发垃圾回收的栈扫描时会调用 runtime.suspendG 挂起 Goroutine，该函数会执行下面的逻辑：
-	- 将 _Grunning 状态的 Goroutine 标记成可以被抢占，即将 preemptStop 设置成 true；
-    - 调用 runtime.preemptM 触发抢占；
+   - 将 \_Grunning 状态的 Goroutine 标记成可以被抢占，即将 preemptStop 设置成 true；
+   - 调用 runtime.preemptM 触发抢占；
 3. runtime.preemptM 会调用 runtime.signalM 向线程发送信号 SIGURG；
 4. 操作系统会中断正在运行的线程并执行预先注册的信号处理函数 runtime.doSigPreempt；
 5. runtime.doSigPreempt 函数会处理抢占信号，获取当前的 SP 和 PC 寄存器并调用 runtime.sigctxt.pushCall；
 6. runtime.sigctxt.pushCall 会修改寄存器并在程序回到用户态时执行 runtime.asyncPreempt；
 7. 汇编指令 runtime.asyncPreempt 会调用运行时函数 runtime.asyncPreempt2；
 8. runtime.asyncPreempt2 会调用 runtime.preemptPark；
-9. runtime.preemptPark 会修改当前 Goroutine 的状态到 _Gpreempted 并调用 runtime.schedule 让当前函数陷入休眠并让出线程，调度器会选择其它的 Goroutine 继续执行；
+9. runtime.preemptPark 会修改当前 Goroutine 的状态到 \_Gpreempted 并调用 runtime.schedule 让当前函数陷入休眠并让出线程，调度器会选择其它的 Goroutine 继续执行；
 
 简单来说在程序启动的时候，通过 `runtime.sighandler` 注册了 SIGURG 信号，在 GC 的栈扫描的时候，挂起 goroutine，向 M 发送信号（M 在下面会说），然后然当前 goroutine 休眠执行其他的 G
 
 ##### 6.5.2 数据结构
 
 首先 GMP 模型。
-G代表Goroutine
-M代表操作系统的线程
-P为处理器，运行在线程上的本地调度器
+G 代表 Goroutine
+M 代表操作系统的线程
+P 为处理器，运行在线程上的本地调度器
 
 ###### G
 
@@ -1397,10 +1404,10 @@ func execute(gp *g, inheritTime bool) {
 
 ##### 6.5.6 触发调度
 
-- 主动挂起 
-- 系统调用 
-- 协作式调度 
-- 系统监控 
+- 主动挂起
+- 系统调用
+- 协作式调度
+- 系统监控
 
 ##### 6.5.7 线程管理
 

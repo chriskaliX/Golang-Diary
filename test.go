@@ -1,6 +1,7 @@
 package main
 
-import "time"
+import "fmt"
+
 // go tool compile -S test.go
 
 // type Duck interface {
@@ -34,13 +35,8 @@ import "time"
 // 	c.Quack()
 // }
 
-
 func main() {
-	defer println("in main")
-	go func() {
-		defer println("in goroutine")
-		panic("")
-	}()
-
-	time.Sleep(1 * time.Second)
+	a := []string{"1", "2"}
+	a = append(a, []string{"4"}...)
+	fmt.Println(cap(a))
 }
