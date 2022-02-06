@@ -1471,6 +1471,16 @@ GC, 三色标记。默认开始全为白色。能追踪到的 root 节点全部�
 
 ## OTHERS
 
-### unsafe
+### unsafe/uintptr
 
-> https://zhuanlan.zhihu.com/p/67852800
+> https://www.youtube.com/watch?v=a_9oLmeFvwk
+
+**unsafe.Pointer**
+
+Like void \*, to help out the performance.
+
+## PROJECTS
+
+### ETCD(RAFT)
+
+> [video](https://www.bilibili.com/video/BV1CK4y127Lj?from=search&seid=15906636967756735986&spm_id_from=333.337.0.0)
