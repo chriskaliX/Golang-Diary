@@ -5,6 +5,9 @@ This repository is for recording my golang learning. It's very important !!! [Re
 > 写了一段时间的 go, 原理\设计等方面的缺失必须要引起重视! 计划为在 2 个月内完成所有部分的阅读(源码级)
 
 Start from: 2021-12-29 23:35
+Update: 2022-02-12 22:28
+
+> 初步的过了一遍，有些地方概念还有一些模糊，会在后面的时间内慢慢补全
 
 ## 第一部分：预备知识
 
