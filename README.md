@@ -1484,3 +1484,7 @@ Like void \*, to help out the performance.
 ### ETCD(RAFT)
 
 > [video](https://www.bilibili.com/video/BV1CK4y127Lj?from=search&seid=15906636967756735986&spm_id_from=333.337.0.0)
+
+### Golang-Upgrade
+
+release of go 1.18 is coming with generic & very useful functions. Some of the source code we learned from 1.18 beta is generic considered. 
