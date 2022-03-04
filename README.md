@@ -1494,4 +1494,4 @@ release of go 1.18 is coming with generic & very useful functions. Some of the s
 
 ## 其他
 
-在看 iLogtail 的时候发现了 ZeroCopy 这个写法很有意思, 先 mark 一下。拿 bytes to string 这个举例子, 直接修改了其 Header...
+在看 iLogtail 的时候发现了 ZeroCopy 这个写法很有意思, 先 mark 一下。拿 bytes to string 这个举例子, 直接修改了其 Header...(time update)
